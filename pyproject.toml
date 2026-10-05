@@ -1,0 +1,12 @@
+[project]
+name = "ai4cf-rs"
+version = "0.1.0"
+description = "Add your description here"
+authors = [{ name = "iydon", email = "liangiydon@gmail.com" }]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "parsel>=1.12.1",
+    "python-dotenv>=1.2.4",
+    "tqdm>=4.70.1",
+]
