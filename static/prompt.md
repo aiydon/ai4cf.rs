@@ -29,26 +29,51 @@ Write the complete solution into `./main.rs`. Hard requirements:
 
 ## Performance is a first-class requirement
 
-The judge grades the **real test data at maximum constraints** — the samples prove nothing about speed.
+The judge grades the **real test data at maximum constraints**, and those tests are
+*adversarial*, not random: the same solution can run 20-50x slower on a structured input
+than on uniform random data of the same size. A "maximum size" input is **not** a
+worst-case input, and samples prove nothing about speed.
 
-- State the intended complexity before coding, then *measure it*. Write a generator for a maximum-constraint input into `./scratch/max.in` (respect the exact input format and the stated bounds, e.g. the largest `n`, `t`, value ranges) and run `make bench`: it prints wall time, peak memory, the share of the time limit, and the fastest/median accepted time of this problem (when known).
-- Targets: **≤ 1/3 of {{TIME_LIMIT}} on your max input**, and within a small factor of the fastest accepted submission above. If the intended solution is clearly linear/log-linear and you are an order of magnitude slower, the constant factor is the bug — find it before finishing.
-- Re-measure after every significant change; a "tiny" change that doubles the runtime is a regression.
-- Known constant-factor traps to avoid: per-token `String` allocation, `format!`/`println!` inside loops (build one `String` or use `BufWriter`), `Vec<Vec<_>>` where one flat `Vec` with manual indexing works, cloning to appease the borrow checker, `HashMap` for dense small integer keys, `pow`/`%`/division per step, re-sorting inside a loop, recursion where a loop suffices, and `--release`-only optimizations that `rustc -O` does not perform.
-- Memory: keep allocations proportional to the input; the memory limit is {{MEMORY_LIMIT}}.
-- `./scratch/` never leaks into `main.rs`: the submitted file must stay self-contained.
+Do all of this, in order:
+
+1. State the intended complexity, and name the quantity your inner loop actually
+   counts (pairs enumerated, hash probes, cells visited, edges relaxed, ...).
+2. Write several max-constraint inputs into `./scratch/` (`make bench` measures every
+   `scratch/max*.in` and reports the worst), including at least:
+   - `max.in` — the shape that maximizes *that quantity for your algorithm*: all values
+     equal, all zeros, value/zero stripes, one huge value, a degenerate 1 x N grid, ...
+     This is the file that decides TLE.
+   - `max2_*.in` — the remaining extremes (all zeros; all equal; exactly two distinct
+     values; alternating stripes).
+   - `max3_*.in` — the maximum number of test cases `t` with the smallest legal grids
+     (per-test overhead), plus the largest grid split across a few tests, if the global
+     `sum(n*m)` bound allows it.
+   - `max4_*.in` — uniform random at maximum size, as the benign baseline.
+3. Iterate until the **worst** shape is ≤ 1/5 of {{TIME_LIMIT}}, and no shape is killed by
+   `make bench`. A benign shape at 2% of the limit means nothing while another is at 90%.
+4. If the worst shape is far worse than the benign one, the *algorithm* is wrong, not the
+   constant factor: bound the work your inner loop can do for **every** input of the stated
+   size (argument sketch, not hope), and fix the algorithm until the bound holds.
+5. Assume the judge's machine is slower than this one and its tests are worse than yours:
+   keep a safety factor, and respect the memory limit ({{MEMORY_LIMIT}}).
+6. Constant-factor traps to avoid: per-token `String` allocation, `format!`/`println!`
+   inside loops (build one `String` or use `BufWriter`), `Vec<Vec<_>>` where one flat `Vec`
+   with manual indexing works, cloning to appease the borrow checker, `HashMap` for dense
+   small integer keys, `pow`/`%`/division per step, re-sorting inside a loop, recursion
+   where a loop suffices.
+7. `./scratch/` never leaks into `main.rs`: the submitted file must stay self-contained.
 
 ## Verification (mandatory — this is the definition of done)
 
 - `make build` — must compile cleanly. Fix warnings; no `unsafe` unless truly required.
 - `make test` — builds and runs your binary on every sample, printing PASS/FAIL with a unified diff (trailing whitespace is ignored). **All samples must pass.**
-- `make bench` — builds and times your binary on the worst-case input. Fix `TOO SLOW` before finishing. After you stop, the harness re-runs the samples and the max input itself and enforces the real time limit.
+- `make bench` — builds and times your binary on **every** `scratch/max*.in`, printing each shape and the worst one; a run that blows past the time limit is killed and reported as `TOO SLOW`. Fix that before finishing. After you stop, the harness re-runs the samples and the worst shape itself and enforces the real time limit.
 - Samples are weak evidence. When the problem is greedy/constructive/counting/DP, write a brute force plus a random generator under `./scratch/`, stress-test your solution against them over many random small cases, and fix every counterexample.
 - Never edit `samples/`, `statement.*`, `input.rs` or `Makefile` to make things pass.
 
 ## Final answer
 
-Reply with the algorithm, the measured complexity, the bench numbers (max input: time and memory), and — once every sample passes and `main.rs` is the final artifact — this exact line:
+Reply with the algorithm, the measured complexity, the bench numbers (**every** shape, highlighting the worst, with time and memory), and — once every sample passes and `main.rs` is the final artifact — this exact line:
 
     STATUS: SOLVED
 

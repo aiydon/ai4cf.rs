@@ -18,7 +18,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .bench import BenchOutcome, bench_input, bench_problem
+from .bench import BenchOutcome, bench_inputs, bench_problem, display_name
 from .config import ROOT, Settings
 from .problemset import problem_url, status_ordered_url, status_url, submit_url
 from .verify import VerifyOutcome, verify_problem
@@ -438,14 +438,14 @@ def solve_problem(
     outcome = verify_problem(path, settings)
     verified_verdict, verified_detail = _verdict_from_verification(outcome)
     bench: BenchOutcome | None = None
-    if verified_verdict == "solved" and bench_input(path) is not None:
+    if verified_verdict == "solved" and bench_inputs(path):
         try:
             bench = bench_problem(path, settings, already_built=True)
         except Exception:  # noqa: BLE001 - a bench failure must not undo a solved verdict
             bench = None
     if bench is not None and bench.over_limit:
         verified_detail = (
-            f"max input {bench.input_file.name}: {bench.elapsed_ms} ms "
+            f"worst max input {display_name(path, bench.input_file)}: {bench.elapsed_ms} ms "
             f"> limit {bench.time_limit_ms} ms"
         )
     # A killed pi explains the outcome better than "main.rs missing".
@@ -482,11 +482,19 @@ def solve_problem(
                 "note": "" if verified else "no official sample tests; pi reported STATUS: SOLVED",
                 "bench": (
                     {
-                        "input": str(bench.input_file.relative_to(path)),
+                        "input": display_name(path, bench.input_file),
                         "ms": bench.elapsed_ms,
                         "rss_kb": bench.rss_kb,
                         "limit_ms": bench.time_limit_ms,
                         "over_limit": bench.over_limit,
+                        "shapes": [
+                            {
+                                "input": display_name(path, run.input_file),
+                                "ms": run.elapsed_ms,
+                                "timed_out": run.timed_out,
+                            }
+                            for run in bench.runs
+                        ],
                     }
                     if bench is not None
                     else None
@@ -506,6 +514,9 @@ def solve_problem(
             detail=attempt.detail,
         )
 
+    if force:
+        # A forced re-run already overwrote main.rs: the old marker is stale now.
+        (path / DONE).unlink(missing_ok=True)
     exhausted = attempt_no >= settings.max_attempts
     if exhausted:
         write_json(

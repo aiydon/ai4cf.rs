@@ -287,7 +287,7 @@ def cmd_bench(settings: Settings, args) -> int:
     print(format_bench(outcome, str(load_meta(path).get("key") or path.name)))
     if not outcome.built:
         return 2
-    if outcome.timed_out or outcome.exit_code != 0:
+    if outcome.timed_out or outcome.failed:
         return 1
     return 1 if outcome.over_limit else 0
 
