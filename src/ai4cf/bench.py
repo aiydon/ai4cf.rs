@@ -4,7 +4,7 @@ The judge shows us only samples, so performance has to be checked locally — an
 "maximum constraints" alone is not enough: a solution can be 25x slower on an
 adversarial *structure* (all-equal values, value/zero stripes, maximum `t`, ...)
 than on uniform random data of the same size. Therefore every file matching
-`scratch/max*.in` is measured, and the worst run is what counts.
+`scratch/*.in` is measured, and the worst run is what counts.
 """
 
 from __future__ import annotations
@@ -20,11 +20,11 @@ from .config import Settings
 from .verify import build, sample_files
 from .workspace import load_meta
 
-BENCH_GLOB = "max*.in"
+BENCH_GLOB = "*.in"  # every input the solver leaves in scratch/ is measured
 
 # Fewer shapes than this means the "worst case" claim rests on one input — which is
 # exactly how a solution passes locally and then TLEs on the judge (see README).
-MIN_SHAPES = 4
+MIN_SHAPES = 3
 
 
 def coverage_warning(shape_count: int) -> str | None:
@@ -33,11 +33,8 @@ def coverage_warning(shape_count: int) -> str | None:
         return None
     return (
         f"only {shape_count} max-input shape(s) measured (< {MIN_SHAPES}): the worst case "
-        "is not covered — add adversarial scratch/max*.in shapes"
+        "is not covered — add adversarial scratch/*.in inputs"
     )
-
-
-LEGACY_BENCH_INPUTS = ("scratch/big.in", "scratch/bench.in")
 
 
 def display_name(path: Path, file: Path | None) -> str:
@@ -52,9 +49,12 @@ def display_name(path: Path, file: Path | None) -> str:
 
 def bench_inputs(path: Path) -> list[Path]:
     """Every worst-case input the solver left behind, or the largest sample."""
-    found: list[Path] = []
-    for pattern in (BENCH_GLOB, *LEGACY_BENCH_INPUTS):
-        found += [file for file in sorted((path / "scratch").glob(pattern)) if file.is_file()]
+    scratch = path / "scratch"
+    found = (
+        [file for file in sorted(scratch.glob(BENCH_GLOB)) if file.is_file()]
+        if scratch.is_dir()
+        else []
+    )
     if found:
         return found
     samples = [pair[0] for pair in sample_files(path)]
@@ -131,7 +131,13 @@ class BenchOutcome:
 
     @property
     def ok(self) -> bool:
-        return self.built and not self.timed_out and not self.failed and not self.over_limit
+        return (
+            self.built
+            and not self.timed_out
+            and not self.failed
+            and not self.over_limit
+            and not self.over_memory
+        )
 
 
 def _run_timed(
@@ -195,7 +201,9 @@ def bench_problem(
     outcome.explicit_input = input_file is not None
     if not inputs:
         outcome.built = False
-        outcome.build_output = "no bench input: write scratch/max.in (max constraints) first"
+        outcome.build_output = (
+            "no bench input: write a worst-case input to ./scratch/<name>.in first"
+        )
         return outcome
 
     limit_ms = int(outcome.time_limit_ms or 2000)
@@ -244,7 +252,7 @@ def format_bench(outcome: BenchOutcome, key: str = "") -> str:
             lines.append(f"{head}{name} ({size}): {run.elapsed_ms} ms ({share}){mark}")
     if outcome.from_sample:
         lines.append(
-            "  !! no scratch/max*.in: this measures a sample, not the worst case —"
+            "  !! nothing in ./scratch/: this measures a sample, not the worst case —"
             " generate adversarial max-constraint inputs before trusting the number"
         )
     worst = outcome.worst
@@ -258,13 +266,21 @@ def format_bench(outcome: BenchOutcome, key: str = "") -> str:
             )
         lines.append(f"  worst    : {name} at {worst.elapsed_ms} ms" + reference)
     memory = f"{outcome.rss_kb / 1024:.1f} MiB" if outcome.rss_kb else "-"
-    memory_limit = f" / limit {outcome.memory_limit_mb} MiB" if outcome.memory_limit_mb else ""
+    memory_limit = ""
+    if outcome.memory_limit_mb:
+        used = outcome.rss_kb / 1024 / outcome.memory_limit_mb * 100
+        memory_limit = f" / limit {outcome.memory_limit_mb} MiB ({used:.0f}%)"
     flag = "  !! over the memory limit" if outcome.over_memory else ""
     lines.append(f"  memory   : {memory}{memory_limit}{flag}")
     if outcome.failed:
         lines.append(f"  exit     : non-zero ({outcome.exit_code})")
-    verdict = (
-        "OK" if outcome.ok else "TOO SLOW" if outcome.over_limit or outcome.timed_out else "NOT OK"
-    )
+    if outcome.ok:
+        verdict = "OK"
+    elif outcome.over_limit or outcome.timed_out:
+        verdict = "TOO SLOW"
+    elif outcome.over_memory:
+        verdict = "OVER MEMORY"
+    else:
+        verdict = "NOT OK"
     lines.append(f"  -> {verdict}")
     return "\n".join(lines)

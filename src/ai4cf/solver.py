@@ -20,7 +20,9 @@ from pathlib import Path
 
 from .bench import BenchOutcome, bench_inputs, bench_problem, display_name
 from .config import ROOT, Settings
+from .fetch import Fetcher
 from .problemset import problem_url, status_ordered_url, status_url, submit_url
+from .verdict import JudgeVerdict, fetch_latest_verdict, is_failure, load_verdict, save_verdict
 from .verify import VerifyOutcome, verify_problem
 from .workspace import DONE, FAILED, load_meta, now, read_json, write_json, write_text
 
@@ -177,6 +179,59 @@ def append_attempt(path: Path, attempt: Attempt, meta: dict) -> dict:
     return record
 
 
+def judge_feedback(path: Path, meta: dict) -> str:
+    """What the judge said about the last submission, when it rejected one."""
+    verdict = load_verdict(path)
+    if verdict is None or not is_failure(verdict):
+        return ""
+    failed_test = f" on test {verdict.failed_test}" if verdict.failed_test else ""
+    lines = [
+        "## The judge already rejected a submission of this problem",
+        "",
+        (
+            f"The last submission of `{verdict.handle}` was **{verdict.verdict.replace('_', ' ')}**"
+            f"{failed_test} ({verdict.headline()}; {verdict.language})."
+        ),
+        "",
+    ]
+    if "MEMORY" in verdict.verdict.upper() and verdict.memory_kb:
+        limit = meta.get("memory_limit_mb")
+        lines.append(
+            f"It peaked at {verdict.memory_kb / 1024:.0f} MiB"
+            + (f" against the {limit} MiB limit" if limit else "")
+            + ": the approach holds far too much data at once."
+        )
+    if "TIME" in verdict.verdict.upper() and verdict.time_ms:
+        limit = meta.get("time_limit_ms")
+        lines.append(
+            f"It burned the whole {verdict.time_ms} ms budget"
+            + (f" (limit {limit} ms)" if limit else "")
+            + ": the worst case is much slower than the samples suggest."
+        )
+    lines += [
+        "That test will be there again, so the fix has to change how much work and memory the",
+        "solution uses on that kind of input — not shave a constant factor.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def refresh_verdict(settings: Settings, path: Path, meta: dict) -> JudgeVerdict | None:
+    """Best effort: learn the judge's verdict before retrying a problem."""
+    if not settings.handle:
+        return None
+    contest_id, index = meta.get("contest_id"), meta.get("index")
+    if not contest_id or not index:
+        return None
+    try:
+        with Fetcher(settings) as fetcher:
+            verdict = fetch_latest_verdict(fetcher, int(contest_id), str(index), settings.handle)
+    except Exception:  # noqa: BLE001 - feedback is optional, never block a solve
+        return None
+    if verdict is not None:
+        save_verdict(path, verdict)
+    return verdict
+
+
 def problem_links(meta: dict) -> dict[str, str]:
     """Links for one problem, recomputed for workspaces fetched before they existed."""
     links = meta.get("links")
@@ -227,6 +282,7 @@ def render_prompt(settings: Settings, path: Path, meta: dict, record: dict) -> s
         "{{SUBMIT_URL}}": str(links.get("submit") or ""),
         "{{STATUS_URL}}": str(links.get("status_by_time") or links.get("status") or ""),
         "{{STATUS_REF}}": status_block(meta),
+        "{{JUDGE_FEEDBACK}}": judge_feedback(path, meta),
         "{{ATTEMPT}}": str(attempt),
         "{{FEEDBACK}}": feedback,
     }
@@ -412,6 +468,9 @@ def solve_problem(
         )
 
     attempt_no = attempts + 1
+    if attempts or force:
+        # Retrying: the judge may have judged the previous submission in the meantime.
+        refresh_verdict(settings, path, meta)
     if shutil.which(settings.pi_bin) is None and not Path(settings.pi_bin).is_file():
         raise RuntimeError(f"PI_BIN={settings.pi_bin!r} not found; check .env")
     prompt = render_prompt(settings, path, meta, record)

@@ -1,4 +1,4 @@
-"""`ai4cf` command line: download / solve / verify / bench / fmt / cost / status."""
+"""`ai4cf` command line: download / solve / verify / bench / verdict / fmt / cost / status."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from .cost import report, scan, status_report
 from .fetch import Fetcher, FetchError
 from .problemset import ProblemRef, iter_problemset
 from .solver import SolveResult, solve_problem, terminate_all
+from .verdict import fetch_latest_verdict, save_verdict
 from .verify import format_outcome, sample_files, verify_problem
 from .workspace import (
     DONE,
@@ -95,6 +96,8 @@ def _selected_dirs(settings: Settings, args, *, what: str) -> list[Path]:
                 continue
             if failed and not (retry_failed or force):
                 continue
+        elif what == "any":
+            pass
         elif what == "verify":
             if not getattr(args, "all", False) and not done:
                 continue
@@ -294,6 +297,29 @@ def cmd_bench(settings: Settings, args) -> int:
     return 1 if outcome.over_limit else 0
 
 
+def cmd_verdict(settings: Settings, args) -> int:
+    handle = args.handle or settings.handle
+    if not handle:
+        print("set AI4CF_HANDLE in .env (or pass --handle) to read your submissions")
+        return 2
+    dirs = _selected_dirs(settings, args, what="any")
+    if not dirs:
+        print("no matching workspace; run `make download` first")
+        return 2
+    with Fetcher(settings) as fetcher:
+        for path in dirs:
+            meta = load_meta(path)
+            verdict = fetch_latest_verdict(
+                fetcher, int(meta["contest_id"]), str(meta["index"]), handle
+            )
+            if verdict is None:
+                print(f"{meta.get('key')}: no submission by {handle} for this problem")
+                continue
+            save_verdict(path, verdict)
+            print(f"{meta.get('key')}: {verdict.headline()} — {verdict.language}")
+    return 0
+
+
 def cmd_check(settings: Settings, args) -> int:
     path = Path(args.path).resolve()
     if not (path / "main.rs").is_file():
@@ -389,6 +415,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify.add_argument("-v", "--verbose", action="store_true", help="print every sample outcome")
     verify.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
+
+    verdict = add(
+        "verdict", "pull the judge's verdict on your last submission of a problem", cmd_verdict
+    )
+    verdict.add_argument("-p", "--problem", default=None, help="only this problem, e.g. 2245/H")
+    verdict.add_argument("--handle", default=None, help="override AI4CF_HANDLE")
 
     bench = sub.add_parser("bench", help="time one problem on its worst-case input")
     bench.set_defaults(func=cmd_bench)

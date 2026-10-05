@@ -51,6 +51,7 @@ class Settings:
     time_mult: float
     bench_mult: float
     status_reference: bool
+    handle: str
     pi_bin: str
     pi_model: str
     pi_thinking: str
@@ -78,6 +79,7 @@ class Settings:
             time_mult=_float("AI4CF_TIME_MULT", 3.0),
             bench_mult=_float("AI4CF_BENCH_MULT", 10.0),
             status_reference=_int("AI4CF_STATUS_REFERENCE", 1) != 0,
+            handle=_str("AI4CF_HANDLE"),
             pi_bin=_str("PI_BIN", "pi"),
             pi_model=_str("PI_MODEL"),
             pi_thinking=_str("PI_THINKING"),

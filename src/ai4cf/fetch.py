@@ -52,9 +52,9 @@ class Fetcher:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def _throttle(self) -> None:
+    def _throttle(self, min_interval: float = 0.0) -> None:
         """Keep at least `AI4CF_FETCH_DELAY` seconds between requests."""
-        delay = self._settings.fetch_delay
+        delay = max(self._settings.fetch_delay, min_interval)
         if delay <= 0:
             return
         with self._lock:
@@ -63,13 +63,20 @@ class Fetcher:
                 time.sleep(wait)
             self._last_request = time.monotonic()
 
-    def get(self, url: str, *, retries: int | None = None) -> httpx.Response:
+    def get(
+        self,
+        url: str,
+        *,
+        retries: int | None = None,
+        params: dict | None = None,
+        min_interval: float = 0.0,
+    ) -> httpx.Response:
         attempts = (self._settings.fetch_retries if retries is None else retries) + 1
         last_error = ""
         for attempt in range(attempts):
-            self._throttle()
+            self._throttle(min_interval)
             try:
-                response = self._client.get(url)
+                response = self._client.get(url, params=params)
             except httpx.HTTPError as exc:  # network level failure
                 last_error = f"{type(exc).__name__}: {exc}"
             else:
