@@ -37,7 +37,7 @@ graph LR
 | `make solve` | 对所有未完成的题目调用 pi（可断点续传） |
 | `make smoke` | 只跑 1 道题（`LIMIT=1`） |
 | `make verify` | 全局验证：重新编译并跑所有**已完成**题目的样例 |
-| `make bench` | 对某一题用 `scratch/max.in` 计时（`PROBLEM=2245/H`），超过时限即 TLE |
+| `make bench` | 对某一题计时 `scratch/max*.in` 的**每种形态**并给出最坏值（`PROBLEM=2245/H`），超出时限即 TLE |
 | `make fmt` | 用 rustfmt 格式化所有 `main.rs`（含 `static/input.rs`） |
 | `make lint` | ruff 检查/格式化本 Python 包 |
 | `make cost` | 费用报表：每题花费、token 数、总花费 |
@@ -101,7 +101,7 @@ statement.html        官方题面（原样片段 + 绝对化链接，可直接�
 statement.txt         题面纯文本（含 limits/tags/样例数量）
 statement.pdf         仅当该题题面是 PDF 时存在（同时把文本抽取进 statement.txt）
 samples/01.in|out    官方样例，逐对编号
-scratch/max.in       pi 自己生成的最大约束输入（make bench 用它计时）
+scratch/max*.in      pi 生成的多种最大约束输入（`make bench` 逐个计时，取最坏）
 input.rs             快速输入模板（std only）
 Makefile             make build / run / test / fmt / clean
 meta.json            元数据：rating、tags、时限、内存、url、是否交互题
@@ -127,7 +127,7 @@ cost.json            每次尝试的时间、token、美元花费、判定、失
 | `AI4CF_FETCH_TIMEOUT` | `30` | 单次请求超时（秒） |
 | `AI4CF_USER_AGENT` | 浏览器 UA | CF 对默认 UA 直接 403 |
 | `AI4CF_TIME_MULT` | `3.0` | 样例运行的时限倍率：`时限 × 倍率`，用于暴露接近 TLE 的解法 |
-| `AI4CF_BENCH_MULT` | `10.0` | `make bench` 的等待上限：`时限 × 倍率` 秒后杀进程（判定仍以真实时限为准） |
+| `AI4CF_BENCH_MULT` | `3.0` | `make bench` 单个形态的等待上限：`时限 × 倍率` 秒后杀进程（判定仍以真实时限为准） |
 | `AI4CF_STATUS_REFERENCE` | `1` | 抓成绩页给 pi 当性能参考（最快/中位 AC 时间、内存、语言）；0 = 关闭 |
 | `PI_BIN` | `pi` | pi 可执行文件 |
 | `PI_MODEL` | `deepseek/deepseek-v4-pro` | pi 的 `--model` 参数 |
@@ -147,10 +147,10 @@ cost.json            每次尝试的时间、token、美元花费、判定、失
    数据做对拍（放在 `./scratch/`，不得被 `main.rs` 引用）；并且要说明复杂度、注意常数。
 5. 编排器在 pi 退出后**自己再验证一次**，通过才写 `.done`，所以“完成”标记只代表
    “当前磁盘上的 `main.rs` 真的通过了全部样例”。
-6. 性能：`make bench`（`ai4cf bench`）用 `./scratch/max.in` 计时，报告耗时、峰值内存、
-   占时限比例，并与成绩页的“最快 AC / 中位 AC”对照；超过**真实时限**判 `TOO SLOW`（退出码 1）。
-   解出后编排器还会自己跑一次 max 输入，把结果写进 `.done` 的 `bench` 字段；
-   若样例通过但 max 输入超时时限，会在 `make solve` 输出里打 `WARN`（提示大概率 TLE）。
+6. 性能：`make bench`（`ai4cf bench`）对 `./scratch/max*.in` 的**每个形态**计时，报告耗时、
+   峰值内存、占时限比例，并给出**最坏形态**与成绩页的“最快 AC / 中位 AC”对照；超出**真实时限**
+   判 `TOO SLOW`（退出码 1）。解出后编排器自己再跑一遍全部形态，结果写进 `.done.bench`
+   （`ms`/`rss_kb`/`shapes`）；若样例通过但最坏形态超时限，会在 `make solve` 输出里打 `WARN`（大概率 TLE）。
 
 失败时：把样例 diff（或 rustc 报错）写入 `cost.json` 并出现在下一次尝试的提示词里
 （`## Previous attempt feedback`），最多重试 `AI4CF_MAX_ATTEMPTS` 次。
@@ -178,6 +178,20 @@ median 1867 ms / 8000 ms 说明这题常数卡得很紧；pi 看到这个数就�
 `format!`/`println!`、`Vec<Vec<_>>`、无谓 `clone`、稠密小键用 `HashMap`、循环内重排序等）。
 
 > 只取数字，不取任何提交的代码：参考的是“这题有多快”，不是“别人怎么写”。
+
+**为什么要按“形态”计时**：最大规模 ≠ 最坏情况。实测 2245/H 的同一份解法（时限 8000 ms）：
+
+| 输入形态 | 规模 | 耗时 |
+|---|---|---|
+| 均匀随机 | 1×100×20000 | 151 ms (2%) |
+| `t` 最大 | 10000×100×2 | 222 ms (3%) |
+| 值/零条纹列 | 1×100×20000 | 3888 ms (49%) |
+| **全零** | 1×100×20000 | **> 80000 ms**（被杀） |
+
+同一份代码在不同结构下相差 500 倍以上 —— 它在 CF 上 TLE 就是这么来的。所以提示词要求：
+先说出内层循环到底在数什么（枚举数对/哈希探测/访问格数…），再构造**让这个量最大**的输入，
+外加全零/全等/条纹/最大 `t`/退化 1×N 等极端形态，全部丢给 `make bench`，
+以**最坏形态 ≤ 时限的 1/5** 为达标线（而不是“平均很好看”）。
 
 ## 断点续传与中断
 
