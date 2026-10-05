@@ -1,12 +1,30 @@
 [project]
 name = "ai4cf-rs"
 version = "0.1.0"
-description = "Add your description here"
+description = "Download Codeforces problems, solve them with pi/deepseek, verify and report cost"
 authors = [{ name = "iydon", email = "liangiydon@gmail.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
     "parsel>=1.12.1",
+    "pypdf>=6.19.0",
     "python-dotenv>=1.2.4",
     "tqdm>=4.70.1",
 ]
+
+[project.scripts]
+ai4cf = "ai4cf.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "ai4cf"
+module-root = "src"
+
+[dependency-groups]
+dev = ["ruff>=0.16.9"]
+
+[tool.ruff]
+line-length = 100

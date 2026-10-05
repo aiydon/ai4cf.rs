@@ -1,0 +1,179 @@
+# ai4cf — 自动下载并求解 Codeforces 题目（pi + deepseek）
+
+给一个难度阈值（例如 3500），Python 会遍历 problemset 列表页、解析出每道题的链接，
+为每道题建立本地工作目录（题面、样例输入输出、Rust 输入模板、Makefile、提示词），
+然后调用 **pi**（deepseek 模型）在非交互模式下求解，最后用官方样例**自动验证**，
+并记录每次尝试的费用。所有代码都落在题目目录的 `main.rs` 里（单文件、仅标准库），
+可以直接提交。
+
+## 快速开始
+
+```bash
+uv sync                    # 安装 Python 依赖（uv add / uv run 管理）
+make smoke                 # 下载并求解 1 道题（.env 中的 AI4CF_LIMIT=1）
+make help                  # 查看所有目标
+```
+
+依赖：`uv`、`rustc`/`rustfmt`、已登录 deepseek 的 `pi`。
+
+## 工作流
+
+```mermaid
+graph LR
+  A["problemset 列表页<br/>tags=3500-"] -->|parsel| B["题目链接"]
+  B -->|httpx + 代理/重试| C["problem/2268/F/"]
+  C --> D["statement.html/txt<br/>statement.pdf<br/>samples/NN.in|out<br/>input.rs + Makefile"] --> E["pi --mode json -p<br/>(deepseek)"]
+  E --> F["rustc -O main.rs<br/>跑全部样例"]
+  F -->|通过| G[".done + cost.json"]
+  F -->|失败| H["把 diff 反馈给下一次尝试<br/>最多 AI4CF_MAX_ATTEMPTS 次"]
+```
+
+`make` 目标：
+
+| 目标 | 作用 |
+|---|---|
+| `make all` | `download` + `solve` |
+| `make download` | 遍历列表页，建立/补齐题目目录（已下载的跳过） |
+| `make solve` | 对所有未完成的题目调用 pi（可断点续传） |
+| `make smoke` | 只跑 1 道题（`LIMIT=1`） |
+| `make verify` | 全局验证：重新编译并跑所有**已完成**题目的样例 |
+| `make fmt` | 用 rustfmt 格式化所有 `main.rs`（含 `static/input.rs`） |
+| `make lint` | ruff 检查/格式化本 Python 包 |
+| `make cost` | 费用报表：每题花费、token 数、总花费 |
+| `make status` | 每题状态：done / failed / pending / attempted |
+| `make clean` / `make distclean` | 删除 Rust 产物 / 删除所有题目的工作目录 |
+
+命令行参数可以就地覆盖 `.env`（导出的环境变量优先级高于 `.env`）：
+
+```bash
+make all LIMIT=0 JOBS=4              # 跑全部，4 并发
+uv run ai4cf solve -p 2268/F         # 只解这一题
+uv run ai4cf verify -p 2268/F -v     # 详细输出该题的每个样例
+uv run ai4cf download --page-limit 1 # 只遍历第 1 页
+```
+
+## 目录结构
+
+```
+.env                       所有参数（阈值、并发、超时、代理、pi 参数）
+Makefile                   上面的目标
+static/input.rs            快速输入模板（会被复制进每个题目目录，供 pi 参考/内联）
+static/prompt.md           pi 的提示词模板（占位符由 Python 渲染）
+static/Makefile            每个题目目录里的 Makefile 模板
+src/ai4cf/config.py        .env -> Settings
+src/ai4cf/fetch.py         限速+重试+代理的 HTTP 客户端
+src/ai4cf/problemset.py    列表页 -> ProblemRef（含 rating/tags）
+src/ai4cf/statement.py     题目页 -> 题面 + 样例（HTML 与 PDF 两种形态）
+src/ai4cf/workspace.py     落盘：题面、样例、input.rs、Makefile、meta.json
+src/ai4cf/solver.py        调用 pi、收集用量/费用、判定与标记
+src/ai4cf/verify.py        rustc 编译 + 样例比对（唯一判定标准）
+src/ai4cf/cost.py          费用聚合报表
+problem/<contest>/<index>/ 每道题的工作目录
+```
+
+单个题目目录：
+
+```
+statement.html        官方题面（原样片段 + 绝对化链接，可直接浏览器打开）
+statement.txt         题面纯文本（含 limits/tags/样例数量）
+statement.pdf         仅当该题题面是 PDF 时存在（同时把文本抽取进 statement.txt）
+samples/01.in|out    官方样例，逐对编号
+input.rs             快速输入模板（std only）
+Makefile             make build / run / test / fmt / clean
+meta.json            元数据：rating、tags、时限、内存、url、是否交互题
+main.rs              **交付物**：单文件、仅标准库、stdin->stdout
+prompt.md            本次尝试实际发给 pi 的提示词（含上一次失败反馈）
+.pi/                 pi 会话与每次尝试的 stream/answer/err 日志
+cost.json            每次尝试的时间、token、美元花费、判定、失败摘要
+.done / .failed      完成/放弃标记（断点续传依据）
+```
+
+## 参数（.env）
+
+| 变量 | 默认 | 含义 |
+|---|---|---|
+| `AI4CF_TAGS` | `3500-` | Codeforces `tags` 过滤串，`3500-` 表示 rating ≥ 3500，也支持 `1600-1900`、`3500-+dp` |
+| `AI4CF_LIMIT` | `1` | 每次最多处理多少题；**0 表示不限**（遍历全部列表页 / 所有待做题目） |
+| `AI4CF_JOBS` | `1` | 下载与求解的并发数；0 表示按 CPU 核数 |
+| `AI4CF_MAX_ATTEMPTS` | `3` | 单题最多尝试次数，超过后写 `.failed` 并跳过 |
+| `AI4CF_PROBLEM_DIR` | `problem` | 工作目录 |
+| `AI4CF_PROXY` | 空 | 形如 `http://127.0.0.1:7890`；为空则直连 |
+| `AI4CF_FETCH_DELAY` | `1.0` | 两次请求之间的最小间隔（CF 请求过快会返回 403） |
+| `AI4CF_FETCH_RETRIES` | `4` | 网络/403/429/5xx 的重试次数（指数退避） |
+| `AI4CF_FETCH_TIMEOUT` | `30` | 单次请求超时（秒） |
+| `AI4CF_USER_AGENT` | 浏览器 UA | CF 对默认 UA 直接 403 |
+| `AI4CF_TIME_MULT` | `3.0` | 样例运行的时限倍率：`时限 × 倍率`，用于暴露接近 TLE 的解法 |
+| `PI_BIN` | `pi` | pi 可执行文件 |
+| `PI_MODEL` | `deepseek/deepseek-v4-pro` | pi 的 `--model` 参数 |
+| `PI_THINKING` | `high` | pi 的 `--thinking` 等级 |
+| `PI_TIMEOUT` | `3600` | 单次尝试的墙钟上限（秒），超时杀进程组并记为 `pi_timeout` |
+| `PI_EXTRA_ARGS` | 空 | 追加给 pi 的参数（例如 `--approve`） |
+
+## 验证方式（保证“跑完即可提交”）
+
+1. `main.rs` 必须能被 `rustc --edition 2021 -O main.rs` 编译 —— 这一条同时证明了
+   “单文件 + 仅标准库 + 不引用外部文件”。
+2. 用官方样例逐对比较（忽略行尾空白与末尾空行）。判定逻辑只有一份，
+   题目目录里的 `make test` 就是调用它（`ai4cf check`），因此 pi 看到的结论与
+   `make verify` 完全一致。
+3. 运行时限 = 题目时限 × `AI4CF_TIME_MULT`，超过即判 TLE，让“样例能过但会超时”的解法暴露出来。
+4. 提示词里明确要求：先 `make test` 全过；对贪心/构造/计数/DP 类题目再写暴力 + 随机
+   数据做对拍（放在 `./scratch/`，不得被 `main.rs` 引用）；并且要说明复杂度、注意常数。
+5. 编排器在 pi 退出后**自己再验证一次**，通过才写 `.done`，所以“完成”标记只代表
+   “当前磁盘上的 `main.rs` 真的通过了全部样例”。
+
+失败时：把样例 diff（或 rustc 报错）写入 `cost.json` 并出现在下一次尝试的提示词里
+（`## Previous attempt feedback`），最多重试 `AI4CF_MAX_ATTEMPTS` 次。
+
+没有官方样例的题目（少数 PDF 题面）无法验证：pi 自报 `STATUS: SOLVED` 时照常写 `.done`，
+但 `"verified": false`，`make verify` 会跳过它们，`make cost` / `make status` 用 `*` 标出——
+宁可显式标“未验证”，也不假装通过。
+
+## 断点续传与中断
+
+* 状态完全落在文件系统上：`.fetched`（已下载）、`.done`（已验证通过）、`.failed`（放弃）。
+* 重复执行 `make download` / `make solve` 会跳过已完成项；中断后直接重跑即可继续。
+* `Ctrl+C` / `SIGTERM`：先杀掉 pi 的整个进程组（SIGTERM，10s 后 SIGKILL），
+  把这次尝试记为 `interrupted` 写入 `cost.json`，不破坏任何已完成标记。
+* `uv run ai4cf solve --force` 重解已完成的题；`--retry-failed` 重试 `.failed` 的题。
+
+## 费用
+
+`cost.json` 的用量来自 `pi --mode json` 流里的 assistant `usage`（token 与美元），
+缺失时回退到 pi 的 session 日志。`make cost` 汇总每题与全项目花费：
+
+```
+2268F      done      attempts=2  cost=$1.2345 tokens=  210.4k (...) rating=3500  Deglado
+    attempt 1: samples_failed exit=0   612.3s $0.5712 model=deepseek/deepseek-v4-pro
+      detail: --- 01 (expected)
+    attempt 2: solved         exit=0   498.1s $0.6633 model=deepseek/deepseek-v4-pro
+
+problems: done=1
+spent on solved problems: $1.2345
+spent in total:           $1.2345
+```
+
+`uv run ai4cf cost -p 2268/F` 可以只看某一题的细节。
+
+## 备注
+
+* 题面是 PDF 的题目（列表页没有 `div.problem-statement`，或内嵌 PDF 查看器）会被自动识别：
+  下载 `statement.pdf`，用 pypdf 抽取文本写入 `statement.txt`；样例仍从页面上的
+  `div.sample-test` 取（两组 `<pre>` 分别对应 `<br>` 与 `div.test-example-line` 两种排版）。
+* 交互题（tag 含 `interactive`）会写进 `meta.json`，提示词会要求改用逐行读写 + flush，
+  但样例验证对交互题意义有限，会被标记为无样例。
+* pi 以 `--no-context-files --no-skills` 启动，避免读到本仓库的上下文文件；
+  其余参数（含 `--approve`）可通过 `PI_EXTRA_ARGS` 追加。
+
+## 已知限制
+
+* 一次尝试是一整段 pi 会话，`PI_TIMEOUT` 是硬上限；3500+ 的难题建议保持默认 3600s
+  （实测一个 800 分题也可能耗费 ~600s 才收尾）。
+* `AI4CF_LIMIT=0` 会遍历全部列表页（`tags=3500-` 目前是 3 页 / 247 题），
+  并对所有未完成题目启动 pi —— 费用会线性增长，请先用小 `LIMIT` 验证。
+* 判定只认官方样例；样例弱是题目本身的属性，所以提示词要求对拍（`./scratch/`），
+  但编排器无法验证“对拍做过没有”，只能验证样例与时限。
+* 站点改版会破坏 parsel 选择器（`td.id a` / `span.ProblemRating` / `div.sample-test`）；
+  解析失败会体现为“下载 0 题”或“无样例”，而不是静默出错。
+* `make verify` 只校验当前磁盘上的 `main.rs`；`.done` 不记录文件哈希，
+  手工改动后请重新 `make verify`。
