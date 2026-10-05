@@ -49,6 +49,8 @@ class Settings:
     fetch_timeout: float
     user_agent: str
     time_mult: float
+    bench_mult: float
+    status_reference: bool
     pi_bin: str
     pi_model: str
     pi_thinking: str
@@ -74,6 +76,8 @@ class Settings:
             fetch_timeout=_float("AI4CF_FETCH_TIMEOUT", 30.0),
             user_agent=_str("AI4CF_USER_AGENT", DEFAULT_USER_AGENT),
             time_mult=_float("AI4CF_TIME_MULT", 3.0),
+            bench_mult=_float("AI4CF_BENCH_MULT", 10.0),
+            status_reference=_int("AI4CF_STATUS_REFERENCE", 1) != 0,
             pi_bin=_str("PI_BIN", "pi"),
             pi_model=_str("PI_MODEL"),
             pi_thinking=_str("PI_THINKING"),

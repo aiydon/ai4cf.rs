@@ -1,4 +1,4 @@
-"""`ai4cf` command line: download / solve / verify / fmt / cost / status."""
+"""`ai4cf` command line: download / solve / verify / bench / fmt / cost / status."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
+from .bench import bench_problem, format_bench
 from .config import ROOT, Settings
 from .cost import report, scan, status_report
 from .fetch import Fetcher, FetchError
@@ -108,7 +109,24 @@ def _selected_dirs(settings: Settings, args, *, what: str) -> list[Path]:
 # ── commands ──────────────────────────────────────────────────────────────────
 
 
+def _ref_from_meta(path: Path) -> ProblemRef | None:
+    """Rebuild a `ProblemRef` from an existing workspace (no listing needed)."""
+    meta = load_meta(path)
+    if not meta.get("contest_id") or not meta.get("index"):
+        return None
+    return ProblemRef(
+        contest_id=int(meta["contest_id"]),
+        index=str(meta["index"]),
+        name=str(meta.get("name") or ""),
+        rating=meta.get("rating"),
+        tags=tuple(meta.get("tags") or ()),
+    )
+
+
 def cmd_download(settings: Settings, args) -> int:
+    wanted = _problem_filter(args)
+    if wanted:
+        return _download_one(settings, args, wanted)
     limit = settings.limit_or_none()
     # Enough listing pages so that `limit` *new* problems can be found (minus the
     # ones already on disk), instead of walking the whole problemset every run.
@@ -152,6 +170,27 @@ def cmd_download(settings: Settings, args) -> int:
     return 1 if errors else 0
 
 
+def _download_one(settings: Settings, args, wanted: str) -> int:
+    paths = [
+        path
+        for path in iter_problem_dirs(settings)
+        if str(load_meta(path).get("key") or path.name).upper().replace("/", "") == wanted
+    ]
+    if not paths:
+        print(f"no workspace for {wanted}; run `make download` first")
+        return 2
+    with Fetcher(settings) as fetcher:
+        for path in paths:
+            ref = _ref_from_meta(path)
+            if ref is None:
+                print(f"{path}: meta.json is incomplete")
+                return 2
+            result = materialize(ref, fetcher, settings, force=True)
+            print(f"{result.status}: {result.path} ({ref.key})")
+            return 0 if result.status in {"fetched", "exists"} else 1
+    return 1
+
+
 def cmd_solve(settings: Settings, args) -> int:
     dirs = _selected_dirs(settings, args, what="solve")
     if not dirs:
@@ -177,6 +216,12 @@ def cmd_solve(settings: Settings, args) -> int:
         print(
             f"FAIL {result.key}: {result.verdict} (attempt {result.attempts}) — {head[0][:160] if head else ''}"
         )
+    for result in results:
+        if result.bench_over_limit:
+            print(
+                f"WARN {result.key}: samples pass but the max input takes "
+                f"{result.bench_ms} ms — over the time limit, expect TLE on the judge"
+            )
     solved = [r for r in results if r.verdict == "solved"]
     unverified = [r for r in results if r.verdict == "solved_unverified"]
     if unverified:
@@ -230,6 +275,21 @@ def cmd_verify(settings: Settings, args) -> int:
         f"verified {len(outcomes) - len(failures)}/{len(outcomes)} problem(s) pass every sample{note}"
     )
     return 1 if failures else 0
+
+
+def cmd_bench(settings: Settings, args) -> int:
+    path = Path(args.path).resolve()
+    if not (path / "main.rs").is_file():
+        print(f"{path}: main.rs not found")
+        return 2
+    input_file = Path(args.input).resolve() if args.input else None
+    outcome = bench_problem(path, settings, input_file=input_file)
+    print(format_bench(outcome, str(load_meta(path).get("key") or path.name)))
+    if not outcome.built:
+        return 2
+    if outcome.timed_out or outcome.exit_code != 0:
+        return 1
+    return 1 if outcome.over_limit else 0
 
 
 def cmd_check(settings: Settings, args) -> int:
@@ -301,7 +361,13 @@ def build_parser() -> argparse.ArgumentParser:
         "-p", "--page-limit", type=int, default=None, help="stop after N listing pages"
     )
     download.add_argument("--force", action="store_true", help="re-download existing workspaces")
-    download.add_argument("--problem", default=None, help=argparse.SUPPRESS)
+    download.add_argument(
+        "-P",
+        "--one-problem",
+        dest="problem",
+        default=None,
+        help="refresh a single workspace, e.g. 2245/H",
+    )
 
     solve = add("solve", "run pi on every pending problem", cmd_solve)
     solve.add_argument("--force", action="store_true", help="solve again even if marked done")
@@ -321,6 +387,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify.add_argument("-v", "--verbose", action="store_true", help="print every sample outcome")
     verify.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
+
+    bench = sub.add_parser("bench", help="time one problem on its worst-case input")
+    bench.set_defaults(func=cmd_bench)
+    bench.add_argument("path", nargs="?", default=".")
+    bench.add_argument("-i", "--input", default=None, help="input file (default: scratch/max.in)")
+    bench.add_argument("-n", "--limit", type=int, default=None, help=argparse.SUPPRESS)
+    bench.add_argument("-j", "--jobs", type=int, default=None, help=argparse.SUPPRESS)
 
     check = sub.add_parser(
         "check", help="build and test one problem directory (used by its Makefile)"

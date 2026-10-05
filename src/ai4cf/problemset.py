@@ -14,9 +14,43 @@ from .fetch import Fetcher
 BASE = "https://codeforces.com"
 PAGE_URL = BASE + "/problemset/page/{page}?tags={tags}"
 PROBLEM_URL = BASE + "/problemset/problem/{contest}/{index}"
+SUBMIT_URL = BASE + "/problemset/submit/{contest}/{index}"
+STATUS_URL = BASE + "/problemset/status/{contest}/problem/{index}"
+STATUS_ORDERED_URL = STATUS_URL + "/page/{page}?order={order}"
+TAGS_URL = BASE + "/problemset/page/{page}?tags={tags}"
 
 _ROW_LINK = re.compile(r"/problemset/problem/(?P<contest>\d+)/(?P<index>[A-Z0-9]+)")
 _TAG_LINK = "/problemset?tags="
+
+
+def problem_url(contest_id: int, index: str) -> str:
+    return PROBLEM_URL.format(contest=contest_id, index=index)
+
+
+def submit_url(contest_id: int, index: str) -> str:
+    """Submit page (needs a logged-in browser session)."""
+    return SUBMIT_URL.format(contest=contest_id, index=index)
+
+
+def status_url(contest_id: int, index: str) -> str:
+    """Status page, plain path — the only shape that is not Cloudflare-challenged."""
+    return STATUS_URL.format(contest=contest_id, index=index)
+
+
+def status_ordered_url(
+    contest_id: int, index: str, *, order: str = "BY_CONSUMED_TIME_ASC", page: int = 1
+) -> str:
+    """Status page sorted by consumed time — for humans in a browser.
+
+    `order` accepts `BY_CONSUMED_TIME_ASC|DESC`, `BY_PROGRAM_LENGTH_ASC|DESC`,
+    `BY_JUDGED_ASC|DESC`, `BY_CREATION_TIME_DESC`; add `&verdictName=OK` to keep
+    only accepted submissions (`WRONG_ANSWER`, `RUNTIME_ERROR`, ... otherwise).
+    """
+    return STATUS_ORDERED_URL.format(contest=contest_id, index=index, page=page, order=order)
+
+
+def tags_url(tags: str, page: int = 1) -> str:
+    return TAGS_URL.format(page=page, tags=quote(tags, safe="+-.,"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,11 +68,21 @@ class ProblemRef:
 
     @property
     def url(self) -> str:
-        return PROBLEM_URL.format(contest=self.contest_id, index=self.index)
+        return problem_url(self.contest_id, self.index)
 
 
 def page_url(page: int, tags: str) -> str:
     return PAGE_URL.format(page=page, tags=quote(tags, safe="+-.,"))
+
+
+def links(ref: ProblemRef) -> dict[str, str]:
+    """Every URL a human (or the prompt) may want for one problem."""
+    return {
+        "problem": ref.url,
+        "submit": submit_url(ref.contest_id, ref.index),
+        "status": status_url(ref.contest_id, ref.index),
+        "status_by_time": status_ordered_url(ref.contest_id, ref.index),
+    }
 
 
 def parse_row(row: Selector) -> ProblemRef | None:

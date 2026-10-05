@@ -3,6 +3,7 @@
 #   make build   compile main.rs with rustc -O --edition 2021 (one file, std only)
 #   make run     build, then feed the first sample on stdin
 #   make test    build, then check EVERY sample (PASS/FAIL + diff) — authoritative
+#   make bench   build, then time it on ./scratch/max.in against the limit (TOO SLOW = TLE)
 #   make fmt     rustfmt main.rs
 #   make clean   drop build artifacts
 
@@ -15,7 +16,7 @@ SRC := main.rs
 BIN := target/main
 SAMPLES := $(sort $(wildcard samples/*.in))
 
-.PHONY: all build run test fmt clean help
+.PHONY: all build run test bench fmt clean help
 
 all: test
 
@@ -32,6 +33,9 @@ run: build
 test:
 	@$(AI4CF) check $(CURDIR)
 
+bench: build
+	@$(AI4CF) bench $(CURDIR)
+
 fmt:
 	rustfmt --edition 2021 $(SRC)
 
@@ -39,4 +43,4 @@ clean:
 	rm -rf target
 
 help:
-	@echo "build | run | test | fmt | clean"
+	@echo "build | run | test | bench | fmt | clean"

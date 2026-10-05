@@ -19,7 +19,7 @@ ifneq ($(PROBLEM),)
 export AI4CF_PROBLEM := $(PROBLEM)
 endif
 
-.PHONY: help all download solve smoke verify fmt lint cost status clean distclean
+.PHONY: help all download solve smoke verify fmt lint cost status bench clean distclean
 
 help:  ## show the available targets
 	@printf '%s\n' \
@@ -28,6 +28,7 @@ help:  ## show the available targets
 	  'make solve            run pi on every pending problem (resumable)' \
 	  'make smoke            download + solve exactly one problem (LIMIT=1)' \
 	  'make verify           run every solved problem against its sample tests' \
+	  'make bench            time one problem on its max input (PROBLEM=2268/F)' \
 	  'make fmt              rustfmt every main.rs and static/input.rs' \
 	  'make lint             ruff check/format on this Python package' \
 	  'make cost             per-problem cost, tokens and totals' \
@@ -59,6 +60,10 @@ fmt:  ## format all Rust sources
 lint:  ## lint and check formatting of the Python package
 	$(UV) run ruff check .
 	$(UV) run ruff format --check .
+
+bench:  ## time one problem on its worst-case input (PROBLEM=2268/F)
+	@test -n "$(PROBLEM)" || { echo "usage: make bench PROBLEM=2268/F"; exit 2; }
+	$(AI4CF) bench $(PROBLEM_DIR)/$(PROBLEM)
 
 cost:  ## cost report (per problem and total)
 	$(AI4CF) cost

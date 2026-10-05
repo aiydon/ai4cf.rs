@@ -26,8 +26,9 @@ from pathlib import Path
 
 from .config import ROOT, Settings
 from .fetch import Fetcher
-from .problemset import ProblemRef
+from .problemset import ProblemRef, links
 from .statement import Statement, parse_statement
+from .status import fetch_runtime_reference
 
 STATIC = ROOT / "static"
 FETCHED = ".fetched"
@@ -122,6 +123,7 @@ def statement_text(statement: Statement, meta: dict, pdf_text: str) -> str:
         limits.append(f"time limit: {meta['time_limit_ms']} ms")
     if meta.get("memory_limit_mb"):
         limits.append(f"memory limit: {meta['memory_limit_mb']} MB")
+    links_md = meta.get("links") or {}
     lines = [
         f"# {statement.title or meta['key']}",
         "",
@@ -135,6 +137,12 @@ def statement_text(statement: Statement, meta: dict, pdf_text: str) -> str:
         statement.text.strip() or "(statement body not available as HTML)",
         "",
         "Sample tests: see ./samples/ (NN.in / NN.out).",
+        "",
+        "## Links",
+        "",
+        f"- problem: {links_md.get('problem', meta['url'])}",
+        f"- submit (needs login): {links_md.get('submit', '-')}",
+        f"- status / runtime ranking: {links_md.get('status_by_time', '-')}",
     ]
     if pdf_text:
         lines += ["", "## PDF statement text", "", pdf_text.strip()]
@@ -186,6 +194,18 @@ def materialize(
             pdf_bytes = None
             statement.text += f"\n\n(PDF download failed: {type(exc).__name__}: {exc})"
 
+    reference = None
+    if settings.status_reference:
+        try:
+            reference = fetch_runtime_reference(
+                fetcher,
+                ref.contest_id,
+                ref.index,
+                time_limit_ms=statement.time_limit_ms,
+            )
+        except Exception:  # noqa: BLE001 - a status page must never block a download
+            reference = None
+
     meta = {
         "key": ref.key,
         "contest_id": ref.contest_id,
@@ -200,6 +220,8 @@ def materialize(
         "interactive": statement.interactive,
         "samples": len(statement.samples),
         "pdf_url": statement.pdf_url,
+        "links": links(ref),
+        "status": reference.as_dict() if reference else None,
         "fetched_at": now(),
     }
 

@@ -18,7 +18,9 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .bench import BenchOutcome, bench_input, bench_problem
 from .config import ROOT, Settings
+from .problemset import problem_url, status_ordered_url, status_url, submit_url
 from .verify import VerifyOutcome, verify_problem
 from .workspace import DONE, FAILED, load_meta, now, read_json, write_json, write_text
 
@@ -60,6 +62,46 @@ class Attempt:
     usage: Usage = field(default_factory=Usage)
 
 
+def status_block(meta: dict) -> str:
+    """Render the judge-side runtime reference for the prompt."""
+    status = meta.get("status") or {}
+    if not status.get("fastest_ms"):
+        return (
+            "## Performance reference\n\n"
+            "_No accepted submission was visible on this problem's status page, so there is no\n"
+            "judge-side runtime target: derive the intended complexity from the constraints and\n"
+            "keep your own `make bench` numbers well under the time limit._\n"
+        )
+    fastest = int(status["fastest_ms"])
+    median = int(status.get("median_ms") or fastest)
+    accepted = int(status.get("accepted") or 0)
+    limit = status.get("time_limit_ms") or meta.get("time_limit_ms")
+    lines = [
+        "## Performance reference (accepted submissions of this problem)",
+        "",
+        f"- fastest accepted: **{fastest} ms**"
+        + (f" ({fastest / limit * 100:.0f}% of the {limit} ms time limit)" if limit else ""),
+        (
+            f"- median of the {accepted} accepted submissions on page 1: {median} ms"
+            f" (slowest of that sample: {status.get('slowest_ms')} ms)"
+        ),
+    ]
+    if status.get("min_memory_kb"):
+        low = int(status["min_memory_kb"]) / 1024
+        high = int(status["max_memory_kb"] or status["min_memory_kb"]) / 1024
+        lines.append(f"- accepted memory range: {low:.1f}-{high:.1f} MiB")
+    languages = ", ".join(f"{name} x{count}" for name, count in (status.get("languages") or []))
+    if languages:
+        lines.append(f"- languages: {languages}")
+    lines.append(f"- source: {status.get('url')}")
+    lines.append("")
+    lines.append(
+        "These are the judge's own measurements (worst test per submission). Treat them as the"
+    )
+    lines.append("intended solution's ballpark: matching them is good, being 10x slower is a bug.")
+    return "\n".join(lines) + "\n"
+
+
 @dataclass(slots=True)
 class SolveResult:
     path: Path
@@ -69,6 +111,8 @@ class SolveResult:
     attempts: int
     cost_usd: float
     run_cost_usd: float = 0.0
+    bench_ms: int | None = None
+    bench_over_limit: bool = False
     detail: str = ""
 
 
@@ -132,6 +176,23 @@ def append_attempt(path: Path, attempt: Attempt, meta: dict) -> dict:
     return record
 
 
+def problem_links(meta: dict) -> dict[str, str]:
+    """Links for one problem, recomputed for workspaces fetched before they existed."""
+    links = meta.get("links")
+    if links:
+        return links
+    contest_id = int(meta.get("contest_id") or 0)
+    index = str(meta.get("index") or "")
+    if not contest_id or not index:
+        return {}
+    return {
+        "problem": problem_url(contest_id, index),
+        "submit": submit_url(contest_id, index),
+        "status": status_url(contest_id, index),
+        "status_by_time": status_ordered_url(contest_id, index),
+    }
+
+
 def render_prompt(settings: Settings, path: Path, meta: dict, record: dict) -> str:
     template = PROMPT_TEMPLATE.read_text(encoding="utf-8")
     runs = record.get("runs") or []
@@ -146,6 +207,7 @@ def render_prompt(settings: Settings, path: Path, meta: dict, record: dict) -> s
             f"```\n{str(last.get('detail') or '')[:2000].strip()}\n```\n\n"
             "Fix forward from the existing `main.rs` instead of restarting from scratch.\n"
         )
+    links = problem_links(meta)
     substitutions = {
         "{{KEY}}": meta.get("key", ""),
         "{{NAME}}": meta.get("name") or meta.get("title") or "",
@@ -161,6 +223,9 @@ def render_prompt(settings: Settings, path: Path, meta: dict, record: dict) -> s
         else "unknown",
         "{{SAMPLES}}": str(meta.get("samples") or 0),
         "{{TIME_MULT}}": f"{settings.time_mult:g}",
+        "{{SUBMIT_URL}}": str(links.get("submit") or ""),
+        "{{STATUS_URL}}": str(links.get("status_by_time") or links.get("status") or ""),
+        "{{STATUS_REF}}": status_block(meta),
         "{{ATTEMPT}}": str(attempt),
         "{{FEEDBACK}}": feedback,
     }
@@ -372,6 +437,17 @@ def solve_problem(
         )
     outcome = verify_problem(path, settings)
     verified_verdict, verified_detail = _verdict_from_verification(outcome)
+    bench: BenchOutcome | None = None
+    if verified_verdict == "solved" and bench_input(path) is not None:
+        try:
+            bench = bench_problem(path, settings, already_built=True)
+        except Exception:  # noqa: BLE001 - a bench failure must not undo a solved verdict
+            bench = None
+    if bench is not None and bench.over_limit:
+        verified_detail = (
+            f"max input {bench.input_file.name}: {bench.elapsed_ms} ms "
+            f"> limit {bench.time_limit_ms} ms"
+        )
     # A killed pi explains the outcome better than "main.rs missing".
     verdict = "pi_timeout" if attempt.timed_out else verified_verdict
     attempt.verdict = verdict
@@ -404,17 +480,30 @@ def solve_problem(
                 "cost_usd": total_cost,
                 "model": attempt.model,
                 "note": "" if verified else "no official sample tests; pi reported STATUS: SOLVED",
+                "bench": (
+                    {
+                        "input": str(bench.input_file.relative_to(path)),
+                        "ms": bench.elapsed_ms,
+                        "rss_kb": bench.rss_kb,
+                        "limit_ms": bench.time_limit_ms,
+                        "over_limit": bench.over_limit,
+                    }
+                    if bench is not None
+                    else None
+                ),
             },
         )
         return SolveResult(
-            path,
-            key,
-            "solved" if verified else "unverified",
-            "solved" if verified else "solved_unverified",
-            attempt_no,
-            total_cost,
-            run_cost,
-            attempt.detail,
+            path=path,
+            key=key,
+            status="solved" if verified else "unverified",
+            verdict="solved" if verified else "solved_unverified",
+            attempts=attempt_no,
+            cost_usd=total_cost,
+            run_cost_usd=run_cost,
+            bench_ms=bench.elapsed_ms if bench is not None and not bench.timed_out else None,
+            bench_over_limit=bool(bench is not None and bench.over_limit),
+            detail=attempt.detail,
         )
 
     exhausted = attempt_no >= settings.max_attempts
