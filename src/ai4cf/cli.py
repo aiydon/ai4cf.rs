@@ -14,7 +14,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from .bench import bench_problem, format_bench
+from .bench import bench_problem, coverage_warning, format_bench
 from .config import ROOT, Settings
 from .cost import report, scan, status_report
 from .fetch import Fetcher, FetchError
@@ -217,6 +217,8 @@ def cmd_solve(settings: Settings, args) -> int:
             f"FAIL {result.key}: {result.verdict} (attempt {result.attempts}) — {head[0][:160] if head else ''}"
         )
     for result in results:
+        if warning := coverage_warning(result.bench_shapes):
+            print(f"WARN {result.key}: {warning}")
         if result.bench_over_limit:
             print(
                 f"WARN {result.key}: samples pass but the max input takes "

@@ -21,6 +21,22 @@ from .verify import build, sample_files
 from .workspace import load_meta
 
 BENCH_GLOB = "max*.in"
+
+# Fewer shapes than this means the "worst case" claim rests on one input — which is
+# exactly how a solution passes locally and then TLEs on the judge (see README).
+MIN_SHAPES = 4
+
+
+def coverage_warning(shape_count: int) -> str | None:
+    """Warn when too few input shapes were measured to claim a worst case."""
+    if shape_count == 0 or shape_count >= MIN_SHAPES:
+        return None
+    return (
+        f"only {shape_count} max-input shape(s) measured (< {MIN_SHAPES}): the worst case "
+        "is not covered — add adversarial scratch/max*.in shapes"
+    )
+
+
 LEGACY_BENCH_INPUTS = ("scratch/big.in", "scratch/bench.in")
 
 

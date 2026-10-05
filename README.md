@@ -149,7 +149,7 @@ cost.json            每次尝试的时间、token、美元花费、判定、失
    “当前磁盘上的 `main.rs` 真的通过了全部样例”。
 6. 性能：`make bench`（`ai4cf bench`）对 `./scratch/max*.in` 的**每个形态**计时，报告耗时、
    峰值内存、占时限比例，并给出**最坏形态**与成绩页的“最快 AC / 中位 AC”对照；超出**真实时限**
-   判 `TOO SLOW`（退出码 1）。解出后编排器自己再跑一遍全部形态，结果写进 `.done.bench`
+   判 `TOO SLOW`（退出码 1）；测得的形态少于 4 个会打 `WARN`（最坏情况没覆盖）。解出后编排器自己再跑一遍全部形态，结果写进 `.done.bench`
    （`ms`/`rss_kb`/`shapes`）；若样例通过但最坏形态超时限，会在 `make solve` 输出里打 `WARN`（大概率 TLE）。
 
 失败时：把样例 diff（或 rustc 报错）写入 `cost.json` 并出现在下一次尝试的提示词里

@@ -113,6 +113,7 @@ class SolveResult:
     run_cost_usd: float = 0.0
     bench_ms: int | None = None
     bench_over_limit: bool = False
+    bench_shapes: int = 0
     detail: str = ""
 
 
@@ -511,6 +512,7 @@ def solve_problem(
             run_cost_usd=run_cost,
             bench_ms=bench.elapsed_ms if bench is not None and not bench.timed_out else None,
             bench_over_limit=bool(bench is not None and bench.over_limit),
+            bench_shapes=len(bench.runs) if bench is not None else 0,
             detail=attempt.detail,
         )
 
