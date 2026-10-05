@@ -37,6 +37,7 @@ graph LR
 | `make solve` | 对所有未完成的题目调用 pi（可断点续传） |
 | `make smoke` | 只跑 1 道题（`LIMIT=1`） |
 | `make verify` | 全局验证：重新编译并跑所有**已完成**题目的样例 |
+| `make bench` | 对某一题用 `scratch/max.in` 计时（`PROBLEM=2245/H`），超过时限即 TLE |
 | `make fmt` | 用 rustfmt 格式化所有 `main.rs`（含 `static/input.rs`） |
 | `make lint` | ruff 检查/格式化本 Python 包 |
 | `make cost` | 费用报表：每题花费、token 数、总花费 |
@@ -49,8 +50,28 @@ graph LR
 make all LIMIT=0 JOBS=4              # 跑全部，4 并发
 uv run ai4cf solve -p 2268/F         # 只解这一题
 uv run ai4cf verify -p 2268/F -v     # 详细输出该题的每个样例
+uv run ai4cf bench problem/2245/H    # 用 scratch/max.in 计时（对比时限/标杆）
+uv run ai4cf download -P 2245/H      # 只刷新这一题的工作区
 uv run ai4cf download --page-limit 1 # 只遍历第 1 页
 ```
+
+## 常用链接（参数说明）
+
+以 `2268/F` 为例：`{contest}` = `2268`，`{index}` = `F`。这些 URL 也写进了每题的
+`meta.json`（`links`）和 `statement.txt`（Links 段）。
+
+| 用途 | URL | 参数说明 |
+|---|---|---|
+| 题目列表（按难度/标签筛选） | `https://codeforces.com/problemset/page/{page}?tags={tags}` | `page` 从 1 开始；`tags=3500-` = rating ≥ 3500，`1600-1900` = 闭区间，`-1200` = 上限；多标签/难度用 `+` 组合，如 `3500-+dp`；对应 `.env` 的 `AI4CF_TAGS` |
+| 题目页面 | `https://codeforces.com/problemset/problem/{contest}/{index}` | 题面；PDF 题会内嵌查看器，本仓库自动识别并额外下载 `statement.pdf`（文本抽进 `statement.txt`） |
+| 提交 | `https://codeforces.com/problemset/submit/{contest}/{index}` | 需登录；提交 `problem/{contest}/{index}/main.rs` |
+| 成绩 / 运行时间排名 | `https://codeforces.com/problemset/status/{contest}/problem/{index}/page/{page}?order=BY_CONSUMED_TIME_ASC` | `order` 可选 `BY_CONSUMED_TIME_ASC/DESC`、`BY_PROGRAM_LENGTH_ASC/DESC`、`BY_JUDGED_ASC/DESC`；`&verdictName=OK` 只看 AC（其他取值 `WRONG_ANSWER`、`RUNTIME_ERROR`、`REJECTED`）；`&programTypeForInvoker=cpp.gcc13-64-winlibs-g++20` 按语言过滤（其余取值如 `rust.2021`、`rust.2024`、`python.pypy3-64`、`java21`、`go`）；`page` 翻页 |
+| 题目成绩（无参路径，脚本用） | `https://codeforces.com/problemset/status/{contest}/problem/{index}` | 同一张表，**不带 query** 才不会被 Cloudflare 拦截；`ai4cf` 用它统计最快/中位运行时间作参考 |
+| 某场比赛的提交（API） | `https://codeforces.com/api/contest.status?contestId={contestId}&from=1&count={count}` | 官方 API，JSON，含 `verdict`/`timeConsumedMillis`/`memoryConsumedBytes`/`programmingLanguage` |
+
+> 带 query（`?order=…`）的 status 页面只适合浏览器打开：给脚本抓取时 CF 会返回
+> Cloudflare 挑战页（"Just a moment..."）。所以 `ai4cf` 抓参考数据时走无参数路径，
+> 在本地筛选 AC 行并统计（只取聚合数字，不取任何人的代码）。
 
 ## 目录结构
 
@@ -64,11 +85,13 @@ src/ai4cf/config.py        .env -> Settings
 src/ai4cf/fetch.py         限速+重试+代理的 HTTP 客户端
 src/ai4cf/problemset.py    列表页 -> ProblemRef（含 rating/tags）
 src/ai4cf/statement.py     题目页 -> 题面 + 样例（HTML 与 PDF 两种形态）
+src/ai4cf/status.py        成绩页 -> 运行时间参考（最快/中位/内存/语言，仅聚合量）
+src/ai4cf/bench.py         scratch/max.in 计时与内存（os.wait4 取子进程 rusage）
 src/ai4cf/workspace.py     落盘：题面、样例、input.rs、Makefile、meta.json
 src/ai4cf/solver.py        调用 pi、收集用量/费用、判定与标记
 src/ai4cf/verify.py        rustc 编译 + 样例比对（唯一判定标准）
 src/ai4cf/cost.py          费用聚合报表
-problem/<contest>/<index>/ 每道题的工作目录
+problem/<contest>/<index>/ 每道题工作目录（`.gitignore` 已忽略 `problem/`）
 ```
 
 单个题目目录：
@@ -78,6 +101,7 @@ statement.html        官方题面（原样片段 + 绝对化链接，可直接�
 statement.txt         题面纯文本（含 limits/tags/样例数量）
 statement.pdf         仅当该题题面是 PDF 时存在（同时把文本抽取进 statement.txt）
 samples/01.in|out    官方样例，逐对编号
+scratch/max.in       pi 自己生成的最大约束输入（make bench 用它计时）
 input.rs             快速输入模板（std only）
 Makefile             make build / run / test / fmt / clean
 meta.json            元数据：rating、tags、时限、内存、url、是否交互题
@@ -103,6 +127,8 @@ cost.json            每次尝试的时间、token、美元花费、判定、失
 | `AI4CF_FETCH_TIMEOUT` | `30` | 单次请求超时（秒） |
 | `AI4CF_USER_AGENT` | 浏览器 UA | CF 对默认 UA 直接 403 |
 | `AI4CF_TIME_MULT` | `3.0` | 样例运行的时限倍率：`时限 × 倍率`，用于暴露接近 TLE 的解法 |
+| `AI4CF_BENCH_MULT` | `10.0` | `make bench` 的等待上限：`时限 × 倍率` 秒后杀进程（判定仍以真实时限为准） |
+| `AI4CF_STATUS_REFERENCE` | `1` | 抓成绩页给 pi 当性能参考（最快/中位 AC 时间、内存、语言）；0 = 关闭 |
 | `PI_BIN` | `pi` | pi 可执行文件 |
 | `PI_MODEL` | `deepseek/deepseek-v4-pro` | pi 的 `--model` 参数 |
 | `PI_THINKING` | `high` | pi 的 `--thinking` 等级 |
@@ -121,6 +147,10 @@ cost.json            每次尝试的时间、token、美元花费、判定、失
    数据做对拍（放在 `./scratch/`，不得被 `main.rs` 引用）；并且要说明复杂度、注意常数。
 5. 编排器在 pi 退出后**自己再验证一次**，通过才写 `.done`，所以“完成”标记只代表
    “当前磁盘上的 `main.rs` 真的通过了全部样例”。
+6. 性能：`make bench`（`ai4cf bench`）用 `./scratch/max.in` 计时，报告耗时、峰值内存、
+   占时限比例，并与成绩页的“最快 AC / 中位 AC”对照；超过**真实时限**判 `TOO SLOW`（退出码 1）。
+   解出后编排器还会自己跑一次 max 输入，把结果写进 `.done` 的 `bench` 字段；
+   若样例通过但 max 输入超时时限，会在 `make solve` 输出里打 `WARN`（提示大概率 TLE）。
 
 失败时：把样例 diff（或 rustc 报错）写入 `cost.json` 并出现在下一次尝试的提示词里
 （`## Previous attempt feedback`），最多重试 `AI4CF_MAX_ATTEMPTS` 次。
@@ -128,6 +158,26 @@ cost.json            每次尝试的时间、token、美元花费、判定、失
 没有官方样例的题目（少数 PDF 题面）无法验证：pi 自报 `STATUS: SOLVED` 时照常写 `.done`，
 但 `"verified": false`，`make verify` 会跳过它们，`make cost` / `make status` 用 `*` 标出——
 宁可显式标“未验证”，也不假装通过。
+
+## 性能参考（提示词怎么给 pi 定目标）
+
+`AI4CF_STATUS_REFERENCE=1` 时，下载阶段会顺手抓一次该题的成绩页，只统计**聚合量**：
+最快 AC、page 1 上 50 条 AC 的中位数/最慢值、内存范围、语言分布，写进 `meta.json.status`，
+并在提示词里渲染成一段 `## Performance reference`，例如 2245/H：
+
+```
+- fastest accepted: 843 ms (11% of the 8000 ms time limit)
+- median of the 50 accepted submissions on page 1: 1867 ms (slowest of that sample: 6968 ms)
+- accepted memory range: 94.3-752.0 MiB
+- languages: C++23 (GCC 14-64, msys2) x28, C++20 (GCC 13-64) x15, C++17 (GCC 7-32) x5
+```
+
+median 1867 ms / 8000 ms 说明这题常数卡得很紧；pi 看到这个数就知道“超线性或常数差 3 倍就 TLE”。
+提示词里同时要求：先写复杂度、再生成 `scratch/max.in`、用 `make bench` 实测、
+目标 ≤ 1/3 时限、与最快 AC 同量级，并列出常见常数浪费（逐 token 分配、热循环里的
+`format!`/`println!`、`Vec<Vec<_>>`、无谓 `clone`、稠密小键用 `HashMap`、循环内重排序等）。
+
+> 只取数字，不取任何提交的代码：参考的是“这题有多快”，不是“别人怎么写”。
 
 ## 断点续传与中断
 
