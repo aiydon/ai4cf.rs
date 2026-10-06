@@ -37,9 +37,12 @@ that may be slower than this one.
 
 Decide for yourself what that worst input looks like *for your own approach* — not "the
 biggest one", but the structure that maximizes whatever your algorithm does per element of
-input (work enumerated, hash probes, allocations, recursion depth, ...). Build a few of them
-in `./scratch/` and measure: `make bench` times every `./scratch/*.in` you leave behind and
-reports the worst time and peak memory against both limits.
+input (work enumerated, hash probes, allocations, recursion depth, ...). Do not stop at the
+first plausible shape: sweep a family of them at maximum size (value alphabet, zero density,
+periodicity, block/checkerboard patterns, degenerate dimensions, the largest number of test
+cases) and keep the slowest — the first adversarial shape you think of is rarely the worst.
+Build them in `./scratch/` and measure: `make bench` times every `./scratch/*.in` you leave
+behind and reports the worst time and peak memory against both limits.
 
 Two things to keep in mind while you design the solution:
 

@@ -101,6 +101,13 @@ def status_block(meta: dict) -> str:
         "These are the judge's own measurements (worst test per submission). Treat them as the"
     )
     lines.append("intended solution's ballpark: matching them is good, being 10x slower is a bug.")
+    lines.append(
+        "Divided by the input size you measured, they also bound the *intended work per element*:"
+    )
+    lines.append(
+        "if your inner loop does orders of magnitude more than that budget allows, the strategy"
+    )
+    lines.append("is wrong and no amount of tuning will close the gap.")
     return "\n".join(lines) + "\n"
 
 
